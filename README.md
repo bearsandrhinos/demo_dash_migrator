@@ -75,3 +75,10 @@ Set these in your local environment (or `.env` for local development):
 
 Do not commit secrets to git.
 
+## Deploy to Streamlit Cloud
+
+1. Push this repo to GitHub and connect it to [Streamlit Community Cloud](https://share.streamlit.io/).
+2. **Important:** In **Advanced settings** when deploying, select **Python 3.11**. (Python 3.14 is not compatible with Streamlit/protobuf.)
+3. If the app is already deployed, delete it and redeploy with Python 3.11 selected.
+4. Add your secrets (API keys, Snowflake credentials) in the Streamlit Cloud secrets manager.
+
