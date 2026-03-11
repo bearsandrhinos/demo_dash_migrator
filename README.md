@@ -77,8 +77,23 @@ Do not commit secrets to git.
 
 ## Deploy to Streamlit Cloud
 
-1. Push this repo to GitHub and connect it to [Streamlit Community Cloud](https://share.streamlit.io/).
-2. **Important:** In **Advanced settings** when deploying, select **Python 3.11**. (Python 3.14 is not compatible with Streamlit/protobuf.)
-3. If the app is already deployed, delete it and redeploy with Python 3.11 selected.
-4. Add your secrets (API keys, Snowflake credentials) in the Streamlit Cloud secrets manager.
+**Python 3.14 causes a crash.** You must use **Python 3.11**. Streamlit Cloud does not let you change Python version after deployment—you must delete and recreate the app.
+
+### First-time deploy
+
+1. Go to [share.streamlit.io](https://share.streamlit.io/) → **Create app**
+2. Enter repo: `bearsandrhinos/demo_dash_migrator`, branch: `main`, file: `streamlit_app.py`
+3. Click **Advanced settings**
+4. In the **Python version** dropdown, select **3.11**
+5. Add secrets (API keys, Snowflake credentials) if needed
+6. Click **Deploy**
+
+### If the app is already deployed (and failing)
+
+1. **Delete** the app: App menu (⋮) → **Delete app**
+2. Note your secrets and custom subdomain (you can reuse them)
+3. **Create app** again with the same repo/branch/file
+4. In **Advanced settings**, select **Python 3.11** (this is required)
+5. Re-enter secrets, set subdomain if desired
+6. Click **Deploy**
 
