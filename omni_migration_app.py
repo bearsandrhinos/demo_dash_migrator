@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 import json
-from typing import Any, Optional, Tuple
+from typing import Optional, Tuple
 from dotenv import load_dotenv
 import os
 import time  # Add this import at the top of your file
@@ -12,125 +12,26 @@ load_dotenv()
 
 # Constants
 SOURCE_ENV = "demodashboards.omniapp.co"  # For dashboard migration
-MODEL_SOURCE_ENV = "source-model.omniapp.co"  # For model migration
-
 SOURCE_API_KEY = os.getenv("SOURCE_API_KEY")
-MODEL_SOURCE_API_KEY = os.getenv("MODEL_SOURCE_API_KEY")
-ORIGIN_MODEL_ID = "ebd137f2-f00c-43eb-8120-6ca240c893aa"  # Model to migrate from
 DOCUMENT_LABELS = ["Verified", "Homepage"]
-SYNC_USER_EMAIL = "peter@omni.co"
 
 SOURCE_BASE_URL = f"https://{SOURCE_ENV}"
-MODEL_SOURCE_BASE_URL = f"https://{MODEL_SOURCE_ENV}"  # For model migration
 
 SOURCE_HEADERS = {
     "Authorization": f"Bearer {SOURCE_API_KEY}",
     "Content-Type": "application/json"
 }
 
-MODEL_SOURCE_HEADERS = {  # For model migration
-    "Authorization": f"Bearer {MODEL_SOURCE_API_KEY}",
-    "Content-Type": "application/json"
+REGION_CONFIG = {
+    "North America": {
+        "model_source_env": "source-model.omniapp.co",
+        "origin_model_id": "ebd137f2-f00c-43eb-8120-6ca240c893aa",
+    },
+    "EMEA": {
+        "model_source_env": "source-model-emea.omniapp.co",
+        "origin_model_id": "7c0a6c0c-2c5f-4b9b-b29b-931e3659a8c0",
+    },
 }
-
-def get_user_by_email(base_url: str, headers: dict, email: str) -> Optional[dict[str, Any]]:
-    """Find a user by email via SCIM list users endpoint."""
-    users_url = f"{base_url}/api/scim/v2/users"
-    response = requests.get(
-        users_url,
-        headers=headers,
-        params={"filter": f'userName eq "{email}"', "count": 100, "startIndex": 1}
-    )
-
-    if not response.ok:
-        st.error(
-            f"Failed to list users while searching for '{email}' from {base_url}: "
-            f"{response.status_code} {response.text}"
-        )
-        return None
-
-    try:
-        payload = response.json()
-    except Exception:
-        st.error(f"Failed to parse list users response while searching for '{email}' from {base_url}")
-        return None
-
-    resources = payload.get("Resources", []) if isinstance(payload, dict) else []
-    for user in resources:
-        if isinstance(user, dict):
-            user_name = user.get("userName")
-            if isinstance(user_name, str) and user_name.lower() == email.lower():
-                return user
-
-    return {}
-
-def create_user(base_url: str, headers: dict, display_name: str, email: str) -> Optional[dict[str, Any]]:
-    """Create a user in the destination Omni environment."""
-    create_url = f"{base_url}/api/scim/v2/users"
-    payload = {
-        "displayName": display_name,
-        "userName": email
-    }
-    response = requests.post(create_url, headers=headers, json=payload)
-
-    if response.status_code in [200, 201]:
-        try:
-            created_user = response.json()
-        except Exception:
-            st.error(f"Created user '{email}', but failed to parse create-user response.")
-            return None
-        st.success(f"Created user '{email}' in destination environment.")
-        return created_user
-
-    st.error(f"Failed to create user '{email}' in destination: {response.status_code} {response.text}")
-    return None
-
-def ensure_user_exists_in_target(dest_base_url: str, dest_headers: dict, email: str) -> Optional[str]:
-    """Ensure user exists in destination and return destination user ID."""
-    source_user = get_user_by_email(MODEL_SOURCE_BASE_URL, MODEL_SOURCE_HEADERS, email)
-    if source_user is None:
-        return None
-    if source_user == {}:
-        st.error(f"User '{email}' was not found in source model environment ({MODEL_SOURCE_ENV}).")
-        return None
-
-    target_user = get_user_by_email(dest_base_url, dest_headers, email)
-    if target_user is None:
-        return None
-    if target_user == {}:
-        source_display_name = source_user.get("displayName") if isinstance(source_user, dict) else None
-        display_name = source_display_name if isinstance(source_display_name, str) and source_display_name.strip() else email
-        target_user = create_user(dest_base_url, dest_headers, display_name, email)
-        if not isinstance(target_user, dict):
-            return None
-    else:
-        st.info(f"User '{email}' already exists in destination. Skipping user creation.")
-
-    user_id = target_user.get("id") if isinstance(target_user, dict) else None
-    if isinstance(user_id, str) and user_id.strip():
-        return user_id
-
-    st.error(f"Destination user '{email}' is missing an ID.")
-    return None
-
-def assign_connection_admin_to_user(dest_base_url: str, dest_headers: dict, user_id: str, connection_id: str) -> bool:
-    """Assign CONNECTION_ADMIN role for the connection to a user."""
-    role_url = f"{dest_base_url}/api/v1/users/{user_id}/model-roles"
-    payload = {
-        "connectionId": connection_id,
-        "roleName": "CONNECTION_ADMIN"
-    }
-    response = requests.post(role_url, headers=dest_headers, json=payload)
-
-    if response.status_code == 200:
-        st.success(f"Assigned CONNECTION_ADMIN to user {user_id} for connection {connection_id}.")
-        return True
-
-    st.error(
-        f"Failed to assign CONNECTION_ADMIN to user {user_id} for connection {connection_id}: "
-        f"{response.status_code} {response.text}"
-    )
-    return False
 
 def apply_label_to_document(document_id: str, label_name: str) -> bool:
     """Apply a single existing label to a document."""
@@ -148,9 +49,9 @@ def apply_label_to_document(document_id: str, label_name: str) -> bool:
     )
     return False
 
-def list_document_ids_in_folder(folder_id: str) -> list[str]:
-    """List all document IDs in a destination folder."""
-    list_url = f"{st.session_state.dest_env}/api/v1/documents"
+def list_document_ids_in_folder(base_url: str, headers: dict, folder_id: str) -> list[str]:
+    """List all document IDs in a folder using GET /v1/documents (folderId filter)."""
+    list_url = f"{base_url}/api/v1/documents"
     document_ids = []
     cursor = None
 
@@ -162,7 +63,7 @@ def list_document_ids_in_folder(folder_id: str) -> list[str]:
         if cursor:
             params["cursor"] = cursor
 
-        response = requests.get(list_url, headers=st.session_state.dest_headers, params=params)
+        response = requests.get(list_url, headers=headers, params=params)
         if not response.ok:
             st.error(
                 f"Failed to list documents in folder {folder_id}: "
@@ -191,12 +92,11 @@ def list_document_ids_in_folder(folder_id: str) -> list[str]:
         if not has_next_page or not cursor:
             break
 
-    # De-duplicate while preserving order.
     unique_document_ids = list(dict.fromkeys(document_ids))
     if not unique_document_ids:
-        st.warning(f"No documents found in folder {folder_id} to label.")
+        st.warning(f"No documents found in folder {folder_id}.")
     else:
-        st.info(f"Found {len(unique_document_ids)} documents in folder for labeling.")
+        st.info(f"Found {len(unique_document_ids)} documents in folder.")
     return unique_document_ids
 
 def apply_labels_to_documents(document_ids: list[str]) -> None:
@@ -275,12 +175,77 @@ def create_folder(folder_name: str) -> Tuple[Optional[str], Optional[str]]:
         st.error(f"Failed to create folder: {response.text}")
         return None, None
 
+def get_folder_by_path(base_url: str, headers: dict, folder_path: str) -> Optional[str]:
+    """Get folder ID by path using GET /v1/folders (docs.omni.co/api/folders/list-folders)."""
+    folders_url = f"{base_url}/api/v1/folders"
+    path_value = folder_path if folder_path.startswith("/") else f"/{folder_path}"
+    path_normalized = path_value.strip("/").lower()
+
+    def _match(folder: dict) -> bool:
+        rec_path = (folder.get("path") or "").strip("/").lower()
+        return rec_path == path_normalized or rec_path.endswith("/" + path_normalized)
+
+    # Try path filter first (path supports wildcards: blob-sales/* or blob-sales/**)
+    for path_param in [path_normalized, path_value, f"{path_normalized}/*"]:
+        resp = requests.get(
+            folders_url, headers=headers,
+            params={"path": path_param, "pageSize": 100, "scope": "organization"}
+        )
+        if resp.ok:
+            try:
+                data = resp.json()
+                records = data.get("records", []) if isinstance(data, dict) else []
+                for folder in records:
+                    if isinstance(folder, dict) and _match(folder):
+                        return folder.get("id")
+                if records and path_param == path_normalized:
+                    return records[0].get("id")
+            except Exception:
+                pass
+
+    cursor = None
+    while True:
+        params = {"pageSize": 100, "scope": "organization"}
+        if cursor:
+            params["cursor"] = cursor
+        response = requests.get(folders_url, headers=headers, params=params)
+        if not response.ok:
+            st.error(f"Failed to list folders: {response.status_code} {response.text}")
+            return None
+        try:
+            payload = response.json()
+            records = payload.get("records", []) if isinstance(payload, dict) else []
+            for folder in records:
+                if isinstance(folder, dict) and _match(folder):
+                    return folder.get("id")
+            page_info = payload.get("pageInfo", {}) or {}
+            cursor = page_info.get("nextCursor")
+            if not page_info.get("hasNextPage") or not cursor:
+                break
+        except Exception:
+            st.error("Failed to parse folders response")
+            return None
+
+    st.error(f"Folder not found: '{path_value}'")
+    return None
+
+def list_source_folder_document_ids(folder_slug: str) -> list[str]:
+    """List all document IDs in a source folder. Uses GET /v1/folders then GET /v1/documents."""
+    folder_id = get_folder_by_path(SOURCE_BASE_URL, SOURCE_HEADERS, folder_slug)
+    if not folder_id:
+        st.error(f"Could not find source folder '{folder_slug}'.")
+        return []
+    return list_document_ids_in_folder(SOURCE_BASE_URL, SOURCE_HEADERS, folder_id)
+
 def migrate_dashboards(folder_id: str, folder_path: str, target_model_id: str):
-    """Download dashboards from source and migrate them to destination."""
-    document_ids = [
-        "882f03d2", "0a08800c", "fc85da17", "074e9237", "4cb0ba16"
-    ]
-    
+    """Download dashboards from source omni-examples folder and migrate them to destination."""
+    with st.spinner("Fetching document list from source folder 'omni-examples'..."):
+        document_ids = list_source_folder_document_ids("omni-examples")
+
+    if not document_ids:
+        st.error("No documents found in source folder — skipping dashboard migration.")
+        return
+
     for doc_id in document_ids:
         get_url = f"{SOURCE_BASE_URL}/api/unstable/documents/{doc_id}/export"
         response = requests.get(get_url, headers=SOURCE_HEADERS)
@@ -320,18 +285,21 @@ def migrate_dashboards(folder_id: str, folder_path: str, target_model_id: str):
 def copy_model_code(target_model_id: str):
     """Copy model code from source to destination using the migration endpoint."""
     try:
-        # Try the migration endpoint without targetApiKey first
-        migration_url = f"{MODEL_SOURCE_BASE_URL}/api/unstable/model/{ORIGIN_MODEL_ID}/migrate"
+        model_source_base_url = f"https://{st.session_state.model_source_env}"
+        origin_model_id = st.session_state.model_origin_id
+        model_source_headers = st.session_state.model_source_headers
+
+        migration_url = f"{model_source_base_url}/api/unstable/model/{origin_model_id}/migrate"
         payload = {
             "gitRef": "origin/main",
             "targetModelId": target_model_id,
-            "targetEnvironment": st.session_state.dest_env.replace("https://", "")  # Remove https:// prefix
+            "targetEnvironment": st.session_state.dest_env.replace("https://", "")
         }
-        
+
         st.write("Migration URL:", migration_url)
         st.write("Payload:", payload)
-        
-        response = requests.post(migration_url, headers=MODEL_SOURCE_HEADERS, json=payload, timeout=30)
+
+        response = requests.post(migration_url, headers=model_source_headers, json=payload, timeout=30)
         
         if response.ok:
             st.success("✅ Model code migration completed successfully")
@@ -408,35 +376,115 @@ def build_destination_env(destination_input: str) -> str:
 
 def main():
     st.title("Omni Migration Tool")
-    
-    # Initialize session state
-    if 'connection_created' not in st.session_state:
-        st.session_state.connection_created = False
-    if 'migration_started' not in st.session_state:
-        st.session_state.migration_started = False
-    if 'dest_env' not in st.session_state:
-        st.session_state.dest_env = None
-    if 'dest_headers' not in st.session_state:
-        st.session_state.dest_headers = None
-    if 'shared_model_id' not in st.session_state:
-        st.session_state.shared_model_id = None  # Initialize shared_model_id in session state
-    
-    # First step: Get destination subdomain and API key
+
+    # --- Session state initialisation ---
+    for key, default in [
+        ("region", None),
+        ("model_source_env", None),
+        ("model_origin_id", None),
+        ("model_source_api_key", None),
+        ("model_source_headers", None),
+        ("api_key_created", None),
+        ("setup_complete", False),
+        ("connection_created", False),
+        ("migration_started", False),
+        ("dest_env", None),
+        ("dest_headers", None),
+        ("shared_model_id", None),
+    ]:
+        if key not in st.session_state:
+            st.session_state[key] = default
+
+    # ── Step 1: Region ────────────────────────────────────────────────────────
+    if not st.session_state.region:
+        st.subheader("Step 1: Select your region")
+        region = st.radio(
+            "Is the target Omni instance in North America or EMEA?",
+            options=list(REGION_CONFIG.keys()),
+            index=None,
+        )
+        if region:
+            cfg = REGION_CONFIG[region]
+            st.session_state.region = region
+            st.session_state.model_source_env = cfg["model_source_env"]
+            st.session_state.model_origin_id = cfg["origin_model_id"]
+            st.rerun()
+        return
+
+    # ── Step 2: Source model API key ─────────────────────────────────────────
+    if not st.session_state.setup_complete:
+        env_host = st.session_state.model_source_env
+        env_url = f"https://{env_host}"
+        api_keys_url = f"{env_url}/keys/organization"
+
+        st.subheader("Step 2: Source model API key")
+        st.caption(f"Region: **{st.session_state.region}** · Source environment: `{env_host}`")
+
+        # 2a: Have you created an API key yet?
+        if st.session_state.api_key_created is None:
+            st.write(f"Have you already created an API key in **{env_host}**?")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ Yes, I have one"):
+                    st.session_state.api_key_created = True
+                    st.rerun()
+            with col2:
+                if st.button("❌ No, not yet"):
+                    st.session_state.api_key_created = False
+                    st.rerun()
+            return
+
+        # 2b: If they haven't created one, point them there first
+        if not st.session_state.api_key_created:
+            st.warning(
+                f"You'll need to create an API key in **{env_host}** before continuing."
+            )
+            st.markdown(
+                f"👉 [Open API key settings in {env_host}]({api_keys_url})"
+            )
+            st.write("Once you've created the key, paste it below.")
+
+        # 2c: Input field for the key (shown regardless of yes/no path)
+        api_key_input = st.text_input(
+            f"API key for `{env_host}`",
+            type="password",
+            key="model_source_api_key_input",
+        )
+
+        if api_key_input:
+            if st.button("Save & continue →"):
+                st.session_state.model_source_api_key = api_key_input
+                st.session_state.model_source_headers = {
+                    "Authorization": f"Bearer {api_key_input}",
+                    "Content-Type": "application/json",
+                }
+                st.session_state.setup_complete = True
+                st.rerun()
+            else:
+                st.info("⚠️ Make sure you've saved your API key somewhere safe — you won't be able to see it again after leaving that page!")
+        return
+
+    # ── Step 3: Destination subdomain + API key ───────────────────────────────
+    st.subheader("Step 3: Destination environment")
+    st.caption(
+        f"Region: **{st.session_state.region}** · "
+        f"Source model: `{st.session_state.model_source_env}`"
+    )
+
     col1, col2 = st.columns(2)
     with col1:
         destination_subdomain = st.text_input("Destination Subdomain")
     with col2:
         destination_api_key = st.text_input("Destination API Key", type="password")
-    
+
     if destination_subdomain and destination_api_key:
-        # Update session state with destination information
         if not st.session_state.dest_env:
             st.session_state.dest_env = build_destination_env(destination_subdomain)
             st.session_state.dest_headers = {
                 "Authorization": f"Bearer {destination_api_key}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
             }
-        
+
         if not st.session_state.connection_created:
             if st.button("Create Connection"):
                 # Step 0: Create connection
@@ -446,27 +494,6 @@ def main():
                         st.session_state.connection_created = True
                         st.success("✅ Connection created successfully")
 
-                        # Ensure required user exists and has connection admin access before model migration.
-                        with st.spinner(f"Ensuring user {SYNC_USER_EMAIL} exists in destination..."):
-                            target_user_id = ensure_user_exists_in_target(
-                                st.session_state.dest_env,
-                                st.session_state.dest_headers,
-                                SYNC_USER_EMAIL
-                            )
-                            if not target_user_id:
-                                st.error("User sync failed. Stopping migration.")
-                                return
-
-                        with st.spinner(f"Assigning CONNECTION_ADMIN for {SYNC_USER_EMAIL} on new connection..."):
-                            if not assign_connection_admin_to_user(
-                                st.session_state.dest_env,
-                                st.session_state.dest_headers,
-                                target_user_id,
-                                connection_id
-                            ):
-                                st.error("Failed to assign connection access. Stopping migration.")
-                                return
-                        
                         # Step 1: Create model with modelKind SCHEMA
                         with st.spinner("Creating SCHEMA model..."):
                             schema_model_id = create_model(st.session_state.dest_env, st.session_state.dest_headers, "My Schema Model", connection_id, model_kind="SCHEMA")
@@ -506,7 +533,11 @@ def main():
 
                                             # List folder documents and apply labels after migration.
                                             st.spinner("Listing folder documents for labeling...")
-                                            folder_document_ids = list_document_ids_in_folder(folder_id)
+                                            folder_document_ids = list_document_ids_in_folder(
+                                                st.session_state.dest_env,
+                                                st.session_state.dest_headers,
+                                                folder_id
+                                            )
                                             if folder_document_ids:
                                                 st.spinner("Applying labels to folder documents...")
                                                 apply_labels_to_documents(folder_document_ids)
@@ -540,7 +571,7 @@ def main():
                                           help="The ID of the model in the destination environment",
                                           key="model_id_input")
     else:
-        st.info("Please enter both the destination url and API key to begin")
+        st.info("Please enter both the destination subdomain and API key to continue.")
 
 if __name__ == "__main__":
     main() 
